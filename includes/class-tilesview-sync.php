@@ -26,6 +26,8 @@ class TilesView_WooCommerce_Sync {
         // Category Sync
         add_action('created_product_cat', [$this, 'on_category_create'], 10, 2);
         add_action('edited_product_cat',  [$this, 'on_category_update'], 10, 2);
+        add_action('delete_product_cat', [$this, 'on_category_delete'], 10, 2);
+
         
         // Show fields when adding a new category
         add_action('product_cat_add_form_fields', 'tv_add_category_fields', 10, 2);
@@ -640,6 +642,39 @@ class TilesView_WooCommerce_Sync {
             tilesview_log("ERROR: Category update failed");
         }
     }
+    
+    public function on_category_delete($term_id, $tt_id) {
+    tilesview_log("=== CATEGORY DELETE TRIGGERED ===", ['term_id' => $term_id]);
+    
+    // Get TilesView category ID
+    $tv_cat_id = get_term_meta($term_id, '_tilesview_cat_id', true);
+    tilesview_log("TilesView Category ID: " . ($tv_cat_id ?: 'None'));
+    
+    if (!$tv_cat_id) {
+        tilesview_log("No TilesView category ID found, skipping delete sync");
+        return;
+    }
+    // Prepare payload
+    $payload = [ 'tv_cat_id' => (int)$tv_cat_id];
+    tilesview_log("Delete Category Payload", $payload);
+    
+    // Call DELETE API for category
+    $response = $this->api_call('category/', 'DELETE', $payload, 'Category Delete - ID: ' . $term_id);
+
+    if ($response) {
+        // Remove meta after successful delete
+        delete_term_meta($term_id, '_tilesview_cat_id');
+        tilesview_log("Category deleted successfully from TilesView", [
+            'wc_term_id' => $term_id,
+            'tv_cat_id' => $tv_cat_id,
+        ]);
+    } else {
+        tilesview_log("ERROR: TilesView category delete failed", [
+            'wc_term_id' => $term_id,
+            'tv_cat_id' => $tv_cat_id,
+        ]);
+    }
+}
 
     /** --------------
      * FILTER MANAGEMENT (unchanged)
