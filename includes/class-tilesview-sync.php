@@ -13,9 +13,15 @@ class TilesView_WooCommerce_Sync {
         add_action('admin_menu',  [$this, 'add_admin_menu']);
         add_action('admin_init',  [$this, 'register_settings']);
 
-        // Product Sync
-        add_action('save_post_product',   [$this, 'on_product_save'], 10, 3);
-        add_action('before_delete_post',  [$this, 'on_product_delete']);
+        // Product Sync - UPDATED TO FIX SKU/PRICE ISSUE
+        add_action('woocommerce_new_product',    [$this, 'on_product_create'], 10, 1);
+        add_action('woocommerce_update_product', [$this, 'on_product_update'], 10, 1);
+        
+        // Product Delete - UPDATED TO FIX DELETE ISSUES ✅
+        // Hook into both trash and permanent delete events
+        add_action('wp_trash_post',      [$this, 'on_product_trash'], 10, 1);
+        add_action('before_delete_post', [$this, 'on_product_delete'], 10, 2);
+        add_action('untrash_post',       [$this, 'on_product_restore'], 10, 1); // Optional: restore functionality
 
         // Category Sync
         add_action('created_product_cat', [$this, 'on_category_create'], 10, 2);
@@ -23,7 +29,7 @@ class TilesView_WooCommerce_Sync {
     }
 
     /** --------------
-     * ADMIN UI: API key/settings
+     * ADMIN UI: API key/settings (unchanged)
      */
     public function add_admin_menu() {
         add_menu_page(
@@ -82,7 +88,7 @@ class TilesView_WooCommerce_Sync {
     }
 
     /** --------------
-     * HELPER: API CALLS WITH FULL DEBUGGING
+     * HELPER: API CALLS WITH FULL DEBUGGING (unchanged)
      */
     private function get_api_headers() {
         $headers = [
@@ -197,13 +203,22 @@ class TilesView_WooCommerce_Sync {
     }
 
     /** --------------
-     * PRODUCT: ADD/UPDATE/DELETE
+     * PRODUCT: CREATE / UPDATE (unchanged from previous fix)
      */
-    public function on_product_save($post_id, $post, $update) {
-        tilesview_log("Product save triggered", [
+    public function on_product_create($product_id) {
+        tilesview_log("Product create triggered", ['product_id' => $product_id]);
+        $this->handle_product_sync($product_id, false);
+    }
+
+    public function on_product_update($product_id) {
+        tilesview_log("Product update triggered", ['product_id' => $product_id]);
+        $this->handle_product_sync($product_id, true);
+    }
+
+    private function handle_product_sync($post_id, $is_update) {
+        tilesview_log("Product sync triggered", [
             'post_id' => $post_id,
-            'is_update' => $update,
-            'post_status' => $post->post_status
+            'is_update' => $is_update
         ]);
 
         if (get_post_type($post_id) != "product") {
@@ -216,6 +231,7 @@ class TilesView_WooCommerce_Sync {
             return;
         }
 
+        $post = get_post($post_id);
         if ($post->post_status !== 'publish') {
             tilesview_log("Skipping non-published product");
             return;
@@ -281,23 +297,119 @@ class TilesView_WooCommerce_Sync {
         }
     }
 
-    public function on_product_delete($post_id) {
-        tilesview_log("Product delete triggered", ['post_id' => $post_id]);
+    /** --------------
+     * PRODUCT: DELETE/TRASH/RESTORE - ENHANCED WITH DEBUGGING ✅
+     */
+    public function on_product_trash($post_id) {
+        tilesview_log("=== PRODUCT TRASH TRIGGERED ===");
+        tilesview_log("Post ID: " . $post_id);
+        tilesview_log("Hook: wp_trash_post");
+        
+        if (get_post_type($post_id) !== "product") {
+            tilesview_log("Skipping non-product post (post_type: " . get_post_type($post_id) . ")");
+            return;
+        }
 
+        // Get TilesView ID before processing
+        $tv_id = get_post_meta($post_id, '_tilesview_id', true);
+        tilesview_log("TilesView ID found: " . ($tv_id ?: 'None'));
+        
+        if (!$tv_id) {
+            tilesview_log("No TilesView ID found, skipping trash sync");
+            return;
+        }
+
+        // Get product info for logging
+        $post = get_post($post_id);
+        tilesview_log("Product details", [
+            'post_id' => $post_id,
+            'post_title' => $post->post_title,
+            'post_status' => $post->post_status,
+            'tv_id' => $tv_id
+        ]);
+
+        // Delete from TilesView when trashed
+        $this->delete_from_tilesview($post_id, $tv_id, 'Product Trash');
+    }
+
+    public function on_product_delete($post_id, $post = null) {
+        tilesview_log("=== PRODUCT DELETE TRIGGERED ===");
+        tilesview_log("Post ID: " . $post_id);
+        tilesview_log("Hook: before_delete_post");
+        
+        // Enhanced debugging
+        if ($post) {
+            tilesview_log("Post object available", [
+                'post_type' => $post->post_type,
+                'post_title' => $post->post_title,
+                'post_status' => $post->post_status
+            ]);
+        } else {
+            tilesview_log("No post object passed, fetching manually");
+            $post = get_post($post_id);
+            if ($post) {
+                tilesview_log("Post fetched manually", [
+                    'post_type' => $post->post_type,
+                    'post_title' => $post->post_title,
+                    'post_status' => $post->post_status
+                ]);
+            } else {
+                tilesview_log("ERROR: Could not fetch post object");
+            }
+        }
+
+        if (!$post || $post->post_type !== "product") {
+            tilesview_log("Skipping non-product post");
+            return;
+        }
+
+        // Get TilesView ID
+        $tv_id = get_post_meta($post_id, '_tilesview_id', true);
+        tilesview_log("TilesView ID found: " . ($tv_id ?: 'None'));
+        
+        if (!$tv_id) {
+            tilesview_log("No TilesView ID found, skipping delete sync");
+            return;
+        }
+
+        // Delete from TilesView when permanently deleted
+        $this->delete_from_tilesview($post_id, $tv_id, 'Product Permanent Delete');
+    }
+
+    public function on_product_restore($post_id) {
+        tilesview_log("=== PRODUCT RESTORE TRIGGERED ===");
+        tilesview_log("Post ID: " . $post_id);
+        tilesview_log("Hook: untrash_post");
+        
         if (get_post_type($post_id) !== "product") {
             tilesview_log("Skipping non-product post");
             return;
         }
 
+        // Get TilesView ID
         $tv_id = get_post_meta($post_id, '_tilesview_id', true);
         if (!$tv_id) {
-            tilesview_log("No TilesView ID found, skipping delete");
+            tilesview_log("No TilesView ID found, product may need to be re-synced");
             return;
         }
 
-        tilesview_log("Performing product DELETE", [
+        tilesview_log("Product restored from trash", [
+            'post_id' => $post_id,
+            'tv_id' => $tv_id
+        ]);
+
+        // Re-sync the product when restored (optional)
+        $product = wc_get_product($post_id);
+        if ($product) {
+            $this->handle_product_sync($post_id, true);
+        }
+    }
+
+    private function delete_from_tilesview($post_id, $tv_id, $context) {
+        tilesview_log("Performing TilesView delete", [
             'wc_product_id' => $post_id,
-            'tv_prod_id' => $tv_id
+            'tv_prod_id' => $tv_id,
+            'context' => $context
         ]);
 
         $payload = [
@@ -305,16 +417,21 @@ class TilesView_WooCommerce_Sync {
             'hard_delete' => true
         ];
 
-        $response = $this->api_call('product', 'DELETE', $payload, 'Product Delete - ID: ' . $post_id);
+        tilesview_log("Delete payload", $payload);
+
+        $response = $this->api_call('product', 'DELETE', $payload, $context . ' - ID: ' . $post_id);
 
         if ($response) {
             delete_post_meta($post_id, '_tilesview_id');
-            tilesview_log("Product deleted successfully", [
+            tilesview_log("Product deleted successfully from TilesView", [
                 'wc_product_id' => $post_id,
                 'tv_prod_id' => $tv_id
             ]);
         } else {
-            tilesview_log("ERROR: Product delete failed");
+            tilesview_log("ERROR: TilesView delete failed", [
+                'wc_product_id' => $post_id,
+                'tv_prod_id' => $tv_id
+            ]);
         }
     }
 
@@ -393,7 +510,7 @@ class TilesView_WooCommerce_Sync {
     }
 
     /** --------------
-     * CATEGORY: ADD/UPDATE
+     * CATEGORY: ADD/UPDATE (unchanged)
      */
     public function on_category_create($term_id, $tt_id) {
         tilesview_log("Category create triggered", ['term_id' => $term_id]);
@@ -472,7 +589,7 @@ class TilesView_WooCommerce_Sync {
     }
 
     /** --------------
-     * FILTER MANAGEMENT
+     * FILTER MANAGEMENT (unchanged)
      */
     public function add_filter($label, $values = []) {
         tilesview_log("Adding filter", ['label' => $label, 'values' => $values]);
@@ -498,7 +615,7 @@ class TilesView_WooCommerce_Sync {
     }
 
     /** --------------
-     * BATCH OPERATIONS
+     * BATCH OPERATIONS (unchanged)
      */
     public function batch_sync_products($products_data) {
         tilesview_log("Starting batch product sync", ['count' => count($products_data)]);
