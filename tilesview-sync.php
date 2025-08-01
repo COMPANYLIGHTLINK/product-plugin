@@ -2,8 +2,8 @@
 /**
  * Plugin Name: TilesView WooCommerce Sync - Debug Edition
  * Description: Sync WooCommerce products, categories, and filters with TilesView API. Full logging and error handling.
- * Version: 1.2.1
- * Author: Your Name
+ * Version: 1.2.5
+ * Author: Atik Mandhat
  * Text Domain: tilesview-sync
  */
 

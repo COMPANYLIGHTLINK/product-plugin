@@ -26,6 +26,40 @@ class TilesView_WooCommerce_Sync {
         // Category Sync
         add_action('created_product_cat', [$this, 'on_category_create'], 10, 2);
         add_action('edited_product_cat',  [$this, 'on_category_update'], 10, 2);
+        
+        // Show fields when adding a new category
+        add_action('product_cat_add_form_fields', 'tv_add_category_fields', 10, 2);
+        function tv_add_category_fields() {
+            ?>
+            <div class="form-field">
+                <label for="term_meta[height]"><?php _e('Height', 'woocommerce'); ?></label>
+                <input type="number" name="term_meta[height]" id="term_meta[height]" value="600" />
+            </div>
+            <div class="form-field">
+                <label for="term_meta[width]"><?php _e('Width', 'woocommerce'); ?></label>
+                <input type="number" name="term_meta[width]" id="term_meta[width]" value="600" />
+            </div>
+            <?php
+        }
+
+        // Show fields when editing a category
+        add_action('product_cat_edit_form_fields', 'tv_edit_category_fields', 10, 2);
+        function tv_edit_category_fields($term, $taxonomy) {
+            $height = get_term_meta($term->term_id, 'height', true);
+            $width = get_term_meta($term->term_id, 'width', true);
+            $term_id = $term->term_id;
+            ?>
+            <tr class="form-field">
+                <th scope="row" valign="top"><label for="term_meta[height]"><?php _e('Height', 'woocommerce'); ?></label></th>
+                <td><input type="number" name="term_meta[height]" id="term_meta[height]" value="<?php echo esc_attr($height ?: 600); ?>" /></td>
+            </tr>
+            <tr class="form-field">
+                <th scope="row" valign="top"><label for="term_meta[width]"><?php _e('Width', 'woocommerce'); ?></label></th>
+                <td><input type="number" name="term_meta[width]" id="term_meta[width]" value="<?php echo esc_attr($width ?: 600); ?>" /></td>
+            </tr>
+            <?php
+        }
+
     }
 
     /** --------------
@@ -495,6 +529,20 @@ class TilesView_WooCommerce_Sync {
         return $src[0];
     }
 
+    private function extract_tv_cat_id_from_response($response) {
+        // Try different response structures
+        if (!empty($response['tv_cat_id'])) {
+            return $response['tv_cat_id'];
+        }
+        if (!empty($response['data']['tv_cat_id'])) {
+            return $response['data']['tv_cat_id'];
+        }
+        if (!empty($response['data']['data']['tv_cat_id'])) {
+            return $response['data']['data']['tv_cat_id'];
+        }
+        return null;
+    }
+
     private function extract_tv_id_from_response($response) {
         // Try different response structures
         if (!empty($response['tv_prod_id'])) {
@@ -520,10 +568,10 @@ class TilesView_WooCommerce_Sync {
             tilesview_log("ERROR: Could not load category term");
             return;
         }
-
-        $height = (int)(get_term_meta($term_id, 'height', true) ?: 600);
-        $width = (int)(get_term_meta($term_id, 'width', true) ?: 600);
-
+        $height = isset($_POST['term_meta']['height']) ? intval($_POST['term_meta']['height']) : 600;
+        $width  = isset($_POST['term_meta']['width']) ? intval($_POST['term_meta']['width']) : 600;
+        update_term_meta($term_id, 'height', $height);
+        update_term_meta($term_id, 'width', $width);
         $payload = [
             'name'   => $term->name,
             'height' => $height,
@@ -535,7 +583,7 @@ class TilesView_WooCommerce_Sync {
         $response = $this->api_call('category/', 'POST', $payload, 'Category Create - ID: ' . $term_id);
 
         if ($response) {
-            $tv_cat_id = $this->extract_tv_id_from_response($response);
+            $tv_cat_id = $this->extract_tv_cat_id_from_response($response);
             if ($tv_cat_id) {
                 update_term_meta($term_id, '_tilesview_cat_id', $tv_cat_id);
                 tilesview_log("Category created successfully", [
@@ -558,17 +606,22 @@ class TilesView_WooCommerce_Sync {
         }
 
         $tv_cat_id = get_term_meta($term_id, '_tilesview_cat_id', true);
+        tilesview_log("Category update triggered",  $tv_cat_id);
         if (!$tv_cat_id) {
             tilesview_log("No TilesView category ID found, performing create instead");
             $this->on_category_create($term_id, $tt_id);
             return;
         }
 
-        $height = (int)(get_term_meta($term_id, 'height', true) ?: 600);
-        $width = (int)(get_term_meta($term_id, 'width', true) ?: 600);
+        $height = isset($_POST['term_meta']['height']) ? intval($_POST['term_meta']['height']) : 600;
+        $width  = isset($_POST['term_meta']['width']) ? intval($_POST['term_meta']['width']) : 600;
 
+        update_term_meta($term_id, 'height', $height);
+        update_term_meta($term_id, 'width', $width);
+
+        tilesview_log("Height && Width:>>",$height, $width);
         $payload = [
-            'tv_prod_id' => $tv_cat_id,
+            'tv_cat_id' => $tv_cat_id,
             'name'       => $term->name,
             'height'     => $height,
             'width'      => $width,
